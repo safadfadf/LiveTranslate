@@ -31,7 +31,7 @@ main.py (LiveTransApp)
   |-- asr_funasr_nano.py   FunASR Nano backend
   |-- translator.py        OpenAI-compatible API client, streaming, make_openai_client()
   |-- subtitle_overlay.py  PyQt6 transparent overlay (2-row header: controls + model/lang combos)
-  |-- control_panel.py     Settings UI (4 tabs: VAD/ASR, Translation, Benchmark, Cache)
+  |-- control_panel.py     Settings UI (5 tabs: VAD/ASR, Translation, Style, Benchmark, Cache)
   |-- dialogs.py           Setup wizard, model download/load dialogs, ModelEditDialog
   |-- benchmark.py         Translation benchmark (BENCH_SENTENCES, run_benchmark())
   |-- log_window.py        Real-time log viewer
@@ -61,6 +61,14 @@ Proxy handling: `proxy="none"` uses `httpx.Client(trust_env=False)` to bypass sy
 DragHandle is a 2-row header bar:
 - **Row 1**: Draggable title + action buttons (Paused/Running, Clear, Settings, Monitor, Quit)
 - **Row 2**: Checkboxes (Click-through, Top-most, Auto-scroll) + Model combo + Target Language combo
+
+Style system:
+- `DEFAULT_STYLE` and `STYLE_PRESETS` defined in `subtitle_overlay.py` — 14 presets including terminal themes (Dracula, Nord, Monokai, Solarized, Gruvbox, Tokyo Night, Catppuccin, One Dark, Everforest, Kanagawa)
+- Default style is high-contrast (pure black background, white translation text, 14pt)
+- Original and translation text have independent `font_family` fields (`original_font_family`, `translation_font_family`)
+- `SubtitleOverlay.apply_style(style)` updates container/header backgrounds, window opacity, and rebuilds all message HTML
+- Style dict stored in `user_settings.json` under `"style"` key; forwarded via `settings_changed` signal → `main.py` → `overlay.apply_style()`
+- Backward compat: old `font_family` key auto-migrated to split fields in `apply_style()`
 
 Key overlay features:
 - **Top-most**: Toggles `WindowStaysOnTopHint`; requires `setWindowFlags()` + `show()` to take effect

@@ -152,6 +152,8 @@ class LiveTransApp:
 
     def _on_settings_changed(self, settings):
         self._vad.update_settings(settings)
+        if "style" in settings and self._overlay:
+            self._overlay.apply_style(settings["style"])
         if "asr_language" in settings and self._asr:
             self._asr.set_language(settings["asr_language"])
         # ASR compute device change forces engine reload
@@ -486,6 +488,9 @@ def main():
         models = panel.get_settings().get("models", [])
         active_idx = panel.get_settings().get("active_model", 0)
         overlay.set_models(models, active_idx)
+        style = panel.get_settings().get("style")
+        if style:
+            overlay.apply_style(style)
         active_model = panel.get_active_model()
         if active_model:
             live_trans._on_model_changed(active_model)
