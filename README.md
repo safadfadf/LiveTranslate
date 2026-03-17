@@ -2,9 +2,9 @@
 
 **English** | [中文](README_zh.md)
 
-Real-time audio translation for Windows. Captures system audio (WASAPI loopback), runs ASR, translates via LLM API, and displays results in a transparent overlay.
+Real-time audio translation for Windows. Captures system audio (WASAPI loopback) and optional microphone input, runs ASR, translates via LLM API, and displays results in a transparent overlay.
 
-Works with any system audio — videos, livestreams. No player modifications needed.
+Works with any system audio — videos, livestreams, voice chat. No player modifications needed.
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Windows](https://img.shields.io/badge/Platform-Windows-0078d4)
@@ -25,6 +25,10 @@ Works with any system audio — videos, livestreams. No player modifications nee
 - **CUDA acceleration**: GPU-accelerated ASR inference
 - **Auto model management**: Setup wizard, ModelScope / HuggingFace dual sources
 - **Built-in benchmark**: Compare translation model speed and quality
+
+## Roadmap
+
+- **Streamer Mode**: Transparent OBS overlay window that translates the streamer's speech in real-time, with multi-language simultaneous output — usable as on-screen subtitles or a live chat translation panel
 
 ## Requirements
 

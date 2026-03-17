@@ -2,9 +2,9 @@
 
 [English](README.md) | **中文**
 
-Windows 实时音频翻译工具。捕获系统音频（WASAPI loopback），语音识别后调用 LLM API 翻译，结果显示在透明悬浮字幕窗口上。
+Windows 实时音频翻译工具。捕获系统音频（WASAPI loopback）和可选的麦克风输入，语音识别后调用 LLM API 翻译，结果显示在透明悬浮字幕窗口上。
 
-适用于看外语视频、直播等场景——无需修改播放器，全局音频捕获即开即用。
+适用于看外语视频、直播、语音对话等场景——无需修改播放器，全局音频捕获即开即用。
 
 ![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![Windows](https://img.shields.io/badge/Platform-Windows-0078d4)
@@ -25,6 +25,10 @@ Windows 实时音频翻译工具。捕获系统音频（WASAPI loopback），语
 - **CUDA 加速**：ASR 模型 GPU 推理
 - **模型自动管理**：首次启动向导，支持 ModelScope / HuggingFace 双源
 - **内置基准测试**：对比翻译模型速度和质量
+
+## 开发计划
+
+- **主播模式**：为 OBS 提供透明窗口，实时翻译主播语音，支持多语言同时输出——可用作画面字幕或直播间留言板
 
 ## 系统要求
 
