@@ -178,16 +178,27 @@ class ControlPanel(QWidget):
         self._asr_engine.currentIndexChanged.connect(self._auto_save)
 
         self._asr_lang = QComboBox()
-        self._asr_lang.addItems(
-            ["auto", "ja", "en", "zh", "ko", "fr", "de", "es", "ru"]
-        )
+        self._asr_lang.setEditable(True)
+        default_langs = ["auto", "ja", "en", "zh", "ko", "fr", "de", "es", "ru"]
+        extra_langs = s.get("asr_languages_extra", [])
+        all_langs = default_langs + [x for x in extra_langs if x not in default_langs]
+        self._asr_lang.addItems(all_langs)
         lang = s.get("asr_language", self._config["asr"].get("language", "auto"))
         idx = self._asr_lang.findText(lang)
         if idx >= 0:
             self._asr_lang.setCurrentIndex(idx)
+        else:
+            self._asr_lang.addItem(lang)
+            self._asr_lang.setCurrentIndex(self._asr_lang.count() - 1)
         asr_layout.addWidget(QLabel(t("label_language_hint")), 1, 0)
         asr_layout.addWidget(self._asr_lang, 1, 1)
         self._asr_lang.currentIndexChanged.connect(self._auto_save)
+        from PyQt6.QtCore import QRegularExpression
+        from PyQt6.QtGui import QRegularExpressionValidator
+        self._asr_lang.setValidator(
+            QRegularExpressionValidator(QRegularExpression(r"[a-zA-Z]{2,4}(-[a-zA-Z]{2,4})?"))
+        )
+        self._asr_lang.lineEdit().editingFinished.connect(self._on_asr_lang_edited)
 
         self._asr_device = QComboBox()
         devices = ["cuda", "cpu"]
@@ -834,6 +845,16 @@ class ControlPanel(QWidget):
                 log.error(f"Failed to delete {path}: {e}")
         QApplication.instance().quit()
 
+    def _on_asr_lang_edited(self):
+        text = self._asr_lang.currentText().strip().lower()
+        if not text:
+            return
+        self._asr_lang.setEditText(text)
+        if self._asr_lang.findText(text) < 0:
+            self._asr_lang.addItem(text)
+            self._asr_lang.setCurrentIndex(self._asr_lang.count() - 1)
+        self._auto_save()
+
     def _on_engine_changed_whisper_vis(self, index):
         self._whisper_group.setVisible(index == 0)
 
@@ -1053,6 +1074,10 @@ class ControlPanel(QWidget):
 
     def _apply_settings(self):
         self._current_settings["asr_language"] = self._asr_lang.currentText()
+        default_langs = {"auto", "ja", "en", "zh", "ko", "fr", "de", "es", "ru"}
+        extra = [self._asr_lang.itemText(i) for i in range(self._asr_lang.count())
+                 if self._asr_lang.itemText(i) not in default_langs]
+        self._current_settings["asr_languages_extra"] = extra
         engine_map = {
             0: "whisper",
             1: "sensevoice",
