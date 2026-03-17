@@ -229,20 +229,42 @@ class ControlPanel(QWidget):
         asr_layout.addWidget(self._audio_device, 3, 1)
         self._audio_device.currentIndexChanged.connect(self._auto_save)
 
+        self._mic_device = QComboBox()
+        self._mic_device.addItem(t("mic_disabled"))
+        self._mic_device.addItem(t("system_default"))
+        try:
+            from audio_capture import list_input_devices
+            for name in list_input_devices():
+                self._mic_device.addItem(name)
+        except Exception:
+            pass
+        saved_mic = s.get("mic_device")
+        if saved_mic:
+            if saved_mic == "__default__":
+                self._mic_device.setCurrentIndex(1)
+            else:
+                idx = self._mic_device.findText(saved_mic)
+                if idx >= 0:
+                    self._mic_device.setCurrentIndex(idx)
+        asr_layout.addWidget(QLabel(t("label_mic")), 4, 0)
+        asr_layout.addWidget(self._mic_device, 4, 1)
+        self._mic_device.currentIndexChanged.connect(self._auto_save)
+
         self._hub_combo = QComboBox()
         self._hub_combo.addItems([t("hub_modelscope"), t("hub_huggingface")])
         saved_hub = s.get("hub", "ms")
         self._hub_combo.setCurrentIndex(0 if saved_hub == "ms" else 1)
-        asr_layout.addWidget(QLabel(t("label_hub")), 4, 0)
-        asr_layout.addWidget(self._hub_combo, 4, 1)
+        asr_layout.addWidget(QLabel(t("label_hub")), 5, 0)
+        asr_layout.addWidget(self._hub_combo, 5, 1)
         self._hub_combo.currentIndexChanged.connect(self._auto_save)
 
         self._ui_lang_combo = QComboBox()
         self._ui_lang_combo.addItems(["English", "中文"])
-        saved_lang = s.get("ui_lang", "en")
+        from i18n import get_lang
+        saved_lang = s.get("ui_lang", get_lang())
         self._ui_lang_combo.setCurrentIndex(0 if saved_lang == "en" else 1)
-        asr_layout.addWidget(QLabel(t("label_ui_lang")), 5, 0)
-        asr_layout.addWidget(self._ui_lang_combo, 5, 1)
+        asr_layout.addWidget(QLabel(t("label_ui_lang")), 6, 0)
+        asr_layout.addWidget(self._ui_lang_combo, 6, 1)
         self._ui_lang_combo.currentIndexChanged.connect(self._on_ui_lang_changed)
 
         layout.addWidget(asr_group)
@@ -1048,6 +1070,13 @@ class ControlPanel(QWidget):
         self._current_settings["audio_device"] = (
             None if self._audio_device.currentIndex() == 0 else audio_dev
         )
+        mic_idx = self._mic_device.currentIndex()
+        if mic_idx == 0:
+            self._current_settings["mic_device"] = None
+        elif mic_idx == 1:
+            self._current_settings["mic_device"] = "__default__"
+        else:
+            self._current_settings["mic_device"] = self._mic_device.currentText()
         self._current_settings["hub"] = (
             "ms" if self._hub_combo.currentIndex() == 0 else "hf"
         )

@@ -223,6 +223,8 @@ class LiveTransApp:
                 self._vad._reset()
                 if self._overlay:
                     self._overlay.update_monitor(0.0, 0.0)
+        if "mic_device" in settings:
+            self._audio.set_mic_device(settings["mic_device"])
         if "target_language" in settings:
             self._target_language = settings["target_language"]
             if self._overlay:
@@ -450,6 +452,8 @@ class LiveTransApp:
 
     def pause(self):
         self._paused = True
+        if self._overlay:
+            self._overlay.update_monitor(0.0, 0.0)
         log.info("Pipeline paused")
 
     def resume(self):
@@ -520,8 +524,8 @@ class LiveTransApp:
             dtype=np.float32,
         )
         while self._running:
-            chunk = self._audio.get_audio(timeout=1.0)
-            if chunk is None:
+            item = self._audio.get_audio(timeout=1.0)
+            if item is None:
                 if self._vad._is_speaking and not self._paused:
                     n = self._vad._get_effective_silence_limit() + 1
                     for _ in range(n):
@@ -531,13 +535,15 @@ class LiveTransApp:
                             break
                 continue
 
-            rms = float(np.sqrt(np.mean(chunk**2)))
-
-            if self._overlay:
-                self._overlay.update_monitor(rms, self._vad.last_confidence)
+            chunk, mic_rms = item
 
             if self._paused:
                 continue
+
+            rms = float(np.sqrt(np.mean(chunk**2)))
+
+            if self._overlay:
+                self._overlay.update_monitor(rms, self._vad.last_confidence, mic_rms)
 
             speech_segment = self._vad.process_chunk(chunk)
             if speech_segment is None:

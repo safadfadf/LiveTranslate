@@ -243,6 +243,23 @@ class MonitorBar(QWidget):
         row1 = QHBoxLayout()
         row1.setSpacing(6)
 
+        # MIC bar (hidden when mic is disabled)
+        self._mic_lbl = QLabel("MIC")
+        self._mic_lbl.setFixedWidth(28)
+        self._mic_lbl.setFont(QFont("Consolas", 8))
+        self._mic_lbl.setStyleSheet("color: #888; background: transparent;")
+        self._mic_lbl.setVisible(False)
+        row1.addWidget(self._mic_lbl)
+
+        self._mic_bar = QProgressBar()
+        self._mic_bar.setRange(0, 100)
+        self._mic_bar.setFixedHeight(14)
+        self._mic_bar.setTextVisible(True)
+        self._mic_bar.setFormat("%v%")
+        self._mic_bar.setStyleSheet(_BAR_CSS_TPL.format(color="#c586c0"))
+        self._mic_bar.setVisible(False)
+        row1.addWidget(self._mic_bar)
+
         rms_lbl = QLabel("RMS")
         rms_lbl.setFixedWidth(28)
         rms_lbl.setFont(QFont("Consolas", 8))
@@ -294,9 +311,15 @@ class MonitorBar(QWidget):
         self._update_system()
         self._refresh_stats()
 
-    def update_audio(self, rms: float, vad: float):
+    def update_audio(self, rms: float, vad: float, mic_rms=None):
         self._rms_bar.setValue(min(100, int(rms * 500)))
         self._vad_bar.setValue(min(100, int(vad * 100)))
+        mic_active = mic_rms is not None
+        if self._mic_lbl.isVisible() != mic_active:
+            self._mic_lbl.setVisible(mic_active)
+            self._mic_bar.setVisible(mic_active)
+        if mic_active:
+            self._mic_bar.setValue(min(100, int(mic_rms * 500)))
 
     def update_asr_device(self, device: str):
         self._asr_device = device
@@ -600,7 +623,7 @@ class SubtitleOverlay(QWidget):
     update_translation_signal = pyqtSignal(int, str, float)
     clear_signal = pyqtSignal()
     # Monitor signals (thread-safe)
-    update_monitor_signal = pyqtSignal(float, float)
+    update_monitor_signal = pyqtSignal(float, float, object)
     update_stats_signal = pyqtSignal(int, int, int, int)
     update_asr_device_signal = pyqtSignal(str)
 
@@ -776,9 +799,9 @@ class SubtitleOverlay(QWidget):
     def _on_monitor_toggled(self, expanded: bool):
         self._monitor.setVisible(expanded)
 
-    @pyqtSlot(float, float)
-    def _on_update_monitor(self, rms: float, vad_conf: float):
-        self._monitor.update_audio(rms, vad_conf)
+    @pyqtSlot(float, float, object)
+    def _on_update_monitor(self, rms: float, vad_conf: float, mic_rms):
+        self._monitor.update_audio(rms, vad_conf, mic_rms)
 
     @pyqtSlot(int, int, int, int)
     def _on_update_stats(self, asr_count, tl_count, prompt_tokens, completion_tokens):
@@ -852,8 +875,8 @@ class SubtitleOverlay(QWidget):
     def update_translation(self, msg_id, translated, translate_ms):
         self.update_translation_signal.emit(msg_id, translated, translate_ms)
 
-    def update_monitor(self, rms, vad_conf):
-        self.update_monitor_signal.emit(rms, vad_conf)
+    def update_monitor(self, rms, vad_conf, mic_rms=None):
+        self.update_monitor_signal.emit(rms, vad_conf, mic_rms)
 
     def update_stats(self, asr_count, tl_count, prompt_tokens, completion_tokens):
         self.update_stats_signal.emit(
