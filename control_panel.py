@@ -189,8 +189,11 @@ class ControlPanel(QWidget):
 
         asr_group = QGroupBox(t("group_asr_engine"))
         asr_layout = QGridLayout(asr_group)
+        asr_layout.setColumnStretch(0, 1)
+        asr_layout.setColumnMinimumWidth(1, 180)
 
         self._asr_engine = QComboBox()
+        self._asr_engine.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self._asr_engine.addItems(
             [
                 "Whisper (faster-whisper)",
@@ -485,8 +488,11 @@ class ControlPanel(QWidget):
         prompt_layout.addLayout(prompt_btn_row)
         layout.addWidget(prompt_group)
 
-        timeout_group = QGroupBox(t("group_timeout"))
-        timeout_layout = QHBoxLayout(timeout_group)
+        net_group = QGroupBox(t("group_network"))
+        net_layout = QGridLayout(net_group)
+        net_layout.setColumnStretch(0, 1)
+        net_layout.setColumnMinimumWidth(1, 180)
+        net_layout.addWidget(QLabel(t("label_timeout")), 0, 0)
         self._timeout_spin = QSpinBox()
         self._timeout_spin.setRange(1, 60)
         self._timeout_spin.setValue(s.get("timeout", 5))
@@ -495,9 +501,8 @@ class ControlPanel(QWidget):
             lambda v: self._current_settings.update({"timeout": v})
         )
         self._timeout_spin.valueChanged.connect(self._auto_save)
-        timeout_layout.addWidget(self._timeout_spin)
-        timeout_layout.addStretch()
-        layout.addWidget(timeout_group)
+        net_layout.addWidget(self._timeout_spin, 0, 1)
+        layout.addWidget(net_group)
 
         layout.addStretch()
         return widget
@@ -550,6 +555,8 @@ class ControlPanel(QWidget):
         # Background group
         bg_group = QGroupBox(t("group_background"))
         bg_layout = QGridLayout(bg_group)
+        bg_layout.setColumnStretch(0, 1)
+        bg_layout.setColumnMinimumWidth(1, 180)
 
         bg_layout.addWidget(QLabel(t("label_bg_color")), 0, 0)
         self._bg_color_btn = self._make_color_btn(
@@ -601,6 +608,8 @@ class ControlPanel(QWidget):
         # Text group
         text_group = QGroupBox(t("group_text"))
         text_layout = QGridLayout(text_group)
+        text_layout.setColumnStretch(0, 1)
+        text_layout.setColumnMinimumWidth(1, 180)
 
         text_layout.addWidget(QLabel(t("label_original_font")), 0, 0)
         self._orig_font_combo = QFontComboBox()
@@ -676,6 +685,8 @@ class ControlPanel(QWidget):
         # Window group
         win_group = QGroupBox(t("group_window"))
         win_layout = QGridLayout(win_group)
+        win_layout.setColumnStretch(0, 1)
+        win_layout.setColumnMinimumWidth(1, 180)
         win_layout.addWidget(QLabel(t("label_window_opacity")), 0, 0)
         self._window_opacity = QSpinBox()
         self._window_opacity.setRange(30, 100)

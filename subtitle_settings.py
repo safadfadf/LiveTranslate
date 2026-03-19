@@ -14,15 +14,15 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QMessageBox,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -115,96 +115,62 @@ def _make_image_row(current_path: str, on_change):
     return row, line_edit
 
 
-class _LineConfigWidget(QWidget):
-    """Config panel for a single text line (original or translation)."""
+class LineEditDialog(QDialog):
+    """Dialog for editing a single subtitle text line configuration."""
 
-    changed = pyqtSignal()
-    remove_requested = pyqtSignal()
-    move_up_requested = pyqtSignal()
-    move_down_requested = pyqtSignal()
-
-    def __init__(self, cfg: dict, removable=False, parent=None):
+    def __init__(self, cfg: dict, parent=None):
         super().__init__(parent)
         self._cfg = dict(cfg)
-        self._removable = removable
-        self._up_btn = None
-        self._down_btn = None
         self._color_controls = []
+        self.setWindowTitle(t("subwin_edit_line"))
+        self.setMinimumWidth(400)
         self._build_ui()
 
     def _build_ui(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(4)
-
-        # Header row: ▲▼ + enabled + type combo + lang + remove
-        hdr = QHBoxLayout()
-        hdr.setSpacing(4)
-
-        self._up_btn = QPushButton(t("subwin_move_up"))
-        self._up_btn.setFixedSize(24, 22)
-        self._up_btn.clicked.connect(self.move_up_requested.emit)
-        hdr.addWidget(self._up_btn)
-
-        self._down_btn = QPushButton(t("subwin_move_down"))
-        self._down_btn.setFixedSize(24, 22)
-        self._down_btn.clicked.connect(self.move_down_requested.emit)
-        hdr.addWidget(self._down_btn)
-
-        self._enabled = QCheckBox(t("subwin_enabled"))
-        self._enabled.setChecked(self._cfg.get("enabled", True))
-        self._enabled.toggled.connect(self._on_change)
-        hdr.addWidget(self._enabled)
-
-        self._type_combo = QComboBox()
-        self._type_combo.addItem(t("subwin_original"), "original")
-        self._type_combo.addItem(t("subwin_translation"), "translation")
-        current_type = self._cfg.get("type", "original")
-        idx = self._type_combo.findData(current_type)
-        if idx >= 0:
-            self._type_combo.setCurrentIndex(idx)
-        self._type_combo.currentIndexChanged.connect(self._on_type_change)
-        hdr.addWidget(self._type_combo)
-
-        self._lang_label = QLabel(t("subwin_target_lang"))
-        hdr.addWidget(self._lang_label)
-        self._lang_combo = QComboBox()
-        self._lang_combo.setMinimumWidth(100)
-        for code, native in LANGUAGES:
-            if code == "auto":
-                continue
-            self._lang_combo.addItem(f"{code} - {native}", code)
-        current_lang = self._cfg.get("lang", "zh")
-        idx = self._lang_combo.findData(current_lang)
-        if idx >= 0:
-            self._lang_combo.setCurrentIndex(idx)
-        self._lang_combo.currentIndexChanged.connect(self._on_change)
-        hdr.addWidget(self._lang_combo)
-        self._update_lang_visibility()
-
-        hdr.addStretch()
-
-        if self._removable:
-            rm_btn = QPushButton(t("subwin_remove_line"))
-            rm_btn.clicked.connect(self.remove_requested.emit)
-            hdr.addWidget(rm_btn)
-
-        outer.addLayout(hdr)
+        layout = QVBoxLayout(self)
 
         grid = QGridLayout()
         grid.setColumnStretch(0, 1)
         grid.setColumnMinimumWidth(1, 180)
         r = 0
 
+        grid.addWidget(QLabel(t("subwin_enabled")), r, 0)
+        self._enabled = QCheckBox()
+        self._enabled.setChecked(self._cfg.get("enabled", True))
+        grid.addWidget(self._enabled, r, 1)
+        r += 1
+
+        grid.addWidget(QLabel(t("subwin_line_type")), r, 0)
+        self._type_combo = QComboBox()
+        self._type_combo.addItem(t("subwin_original"), "original")
+        self._type_combo.addItem(t("subwin_translation"), "translation")
+        idx = self._type_combo.findData(self._cfg.get("type", "original"))
+        if idx >= 0:
+            self._type_combo.setCurrentIndex(idx)
+        self._type_combo.currentIndexChanged.connect(self._update_lang_visibility)
+        grid.addWidget(self._type_combo, r, 1)
+        r += 1
+
+        self._lang_label = QLabel(t("subwin_target_lang"))
+        grid.addWidget(self._lang_label, r, 0)
+        self._lang_combo = QComboBox()
+        for code, native in LANGUAGES:
+            if code == "auto":
+                continue
+            self._lang_combo.addItem(f"{code} - {native}", code)
+        idx = self._lang_combo.findData(self._cfg.get("lang", "zh"))
+        if idx >= 0:
+            self._lang_combo.setCurrentIndex(idx)
+        grid.addWidget(self._lang_combo, r, 1)
+        self._lang_row = r
+        r += 1
+
         grid.addWidget(QLabel(t("subwin_font")), r, 0)
         self._font_combo = QComboBox()
-        families = QFontDatabase.families()
-        self._font_combo.addItems(families)
-        current_font = self._cfg.get("font_family", "Microsoft YaHei")
-        idx = self._font_combo.findText(current_font)
+        self._font_combo.addItems(QFontDatabase.families())
+        idx = self._font_combo.findText(self._cfg.get("font_family", "Microsoft YaHei"))
         if idx >= 0:
             self._font_combo.setCurrentIndex(idx)
-        self._font_combo.currentTextChanged.connect(self._on_change)
         grid.addWidget(self._font_combo, r, 1)
         r += 1
 
@@ -213,14 +179,12 @@ class _LineConfigWidget(QWidget):
         self._size_spin.setRange(8, 120)
         self._size_spin.setSuffix(" pt")
         self._size_spin.setValue(self._cfg.get("font_size", 24))
-        self._size_spin.valueChanged.connect(self._on_change)
         grid.addWidget(self._size_spin, r, 1)
         r += 1
 
         lbl_color = QLabel(t("subwin_color"))
         grid.addWidget(lbl_color, r, 0)
         self._color_btn = _ColorButton(self._cfg.get("color", "#FFFFFF"))
-        self._color_btn.color_changed.connect(self._on_change)
         grid.addWidget(self._color_btn, r, 1)
         self._color_controls.append(lbl_color)
         self._color_controls.append(self._color_btn)
@@ -231,7 +195,6 @@ class _LineConfigWidget(QWidget):
         self._opacity_spin.setRange(0, 100)
         self._opacity_spin.setSuffix("%")
         self._opacity_spin.setValue(round(self._cfg.get("opacity", 255) / 255 * 100))
-        self._opacity_spin.valueChanged.connect(self._on_change)
         grid.addWidget(self._opacity_spin, r, 1)
         r += 1
 
@@ -240,23 +203,20 @@ class _LineConfigWidget(QWidget):
         self._align_combo.addItem(t("subwin_align_left"), "left")
         self._align_combo.addItem(t("subwin_align_center"), "center")
         self._align_combo.addItem(t("subwin_align_right"), "right")
-        align = self._cfg.get("align", "center")
-        idx = self._align_combo.findData(align)
+        idx = self._align_combo.findData(self._cfg.get("align", "center"))
         if idx >= 0:
             self._align_combo.setCurrentIndex(idx)
-        self._align_combo.currentIndexChanged.connect(self._on_change)
         grid.addWidget(self._align_combo, r, 1)
         r += 1
 
-        self._outline_check = QCheckBox(t("subwin_outline"))
+        grid.addWidget(QLabel(t("subwin_outline")), r, 0)
+        self._outline_check = QCheckBox()
         self._outline_check.setChecked(self._cfg.get("outline_enabled", True))
-        self._outline_check.toggled.connect(self._on_change)
-        grid.addWidget(self._outline_check, r, 0)
+        grid.addWidget(self._outline_check, r, 1)
         r += 1
 
         grid.addWidget(QLabel(t("subwin_outline_color")), r, 0)
         self._outline_color_btn = _ColorButton(self._cfg.get("outline_color", "#000000"))
-        self._outline_color_btn.color_changed.connect(self._on_change)
         grid.addWidget(self._outline_color_btn, r, 1)
         r += 1
 
@@ -265,14 +225,11 @@ class _LineConfigWidget(QWidget):
         self._outline_width.setRange(0, 10)
         self._outline_width.setSuffix(" px")
         self._outline_width.setValue(self._cfg.get("outline_width", 2))
-        self._outline_width.valueChanged.connect(self._on_change)
         grid.addWidget(self._outline_width, r, 1)
         r += 1
 
         grid.addWidget(QLabel(t("subwin_bg_image")), r, 0)
-        img_row, self._bg_image_edit = _make_image_row(
-            self._cfg.get("bg_image", ""), self._on_bg_image_change
-        )
+        img_row, self._bg_image_edit = _make_image_row(self._cfg.get("bg_image", ""), lambda: None)
         grid.addLayout(img_row, r, 1)
         r += 1
 
@@ -292,7 +249,6 @@ class _LineConfigWidget(QWidget):
         idx = self._entry_anim_combo.findData(self._cfg.get("entry_animation", "none"))
         if idx >= 0:
             self._entry_anim_combo.setCurrentIndex(idx)
-        self._entry_anim_combo.currentIndexChanged.connect(self._on_change)
         grid.addWidget(self._entry_anim_combo, r, 1)
         r += 1
 
@@ -303,7 +259,6 @@ class _LineConfigWidget(QWidget):
         idx = self._exit_anim_combo.findData(self._cfg.get("exit_animation", "none"))
         if idx >= 0:
             self._exit_anim_combo.setCurrentIndex(idx)
-        self._exit_anim_combo.currentIndexChanged.connect(self._on_change)
         grid.addWidget(self._exit_anim_combo, r, 1)
         r += 1
 
@@ -312,39 +267,26 @@ class _LineConfigWidget(QWidget):
         self._anim_duration_spin.setRange(50, 3000)
         self._anim_duration_spin.setSuffix(" ms")
         self._anim_duration_spin.setValue(self._cfg.get("animation_duration", 300))
-        self._anim_duration_spin.valueChanged.connect(self._on_change)
         grid.addWidget(self._anim_duration_spin, r, 1)
 
-        outer.addLayout(grid)
-        self._update_color_controls_state()
-
-    def _on_bg_image_change(self):
-        self._update_color_controls_state()
-        self._on_change()
-
-    def _update_color_controls_state(self):
-        has_image = bool(self._bg_image_edit.text())
-        for ctrl in self._color_controls:
-            ctrl.setEnabled(not has_image)
-        self._opacity_spin.setEnabled(not has_image)
-
-    def set_move_enabled(self, up: bool, down: bool):
-        if self._up_btn:
-            self._up_btn.setEnabled(up)
-        if self._down_btn:
-            self._down_btn.setEnabled(down)
-
-    def _on_type_change(self, *_):
+        layout.addLayout(grid)
         self._update_lang_visibility()
-        self._on_change()
+
+        # OK / Cancel
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        ok_btn = QPushButton("OK")
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(ok_btn)
+        cancel_btn = QPushButton(t("subwin_cancel"))
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+        layout.addLayout(btn_row)
 
     def _update_lang_visibility(self):
         is_translation = self._type_combo.currentData() == "translation"
         self._lang_label.setVisible(is_translation)
         self._lang_combo.setVisible(is_translation)
-
-    def _on_change(self, *_):
-        self.changed.emit()
 
     def get_config(self) -> dict:
         cfg = {
@@ -378,8 +320,6 @@ class SubtitleSettingsWidget(QWidget):
     def __init__(self, current_settings=None, parent=None):
         super().__init__(parent)
         self._settings = {**DEFAULT_SUBTITLE_WIN_SETTINGS, **(current_settings or {})}
-        self._line_widgets = []
-        self._separators = []
         self._debounce_timer = QTimer(self)
         self._debounce_timer.setSingleShot(True)
         self._debounce_timer.setInterval(200)
@@ -398,7 +338,7 @@ class SubtitleSettingsWidget(QWidget):
         if idx >= 0:
             self._hide_anim_combo.setCurrentIndex(idx)
         self._hide_duration_spin.setValue(self._settings.get("auto_hide_duration", 300))
-        self._rebuild_lines()
+        self._refresh_lines_list()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -425,18 +365,6 @@ class SubtitleSettingsWidget(QWidget):
         top_row.addWidget(hint_btn)
 
         layout.addLayout(top_row)
-
-        # Scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.viewport().setAutoFillBackground(False)
-        scroll_widget = QWidget()
-        scroll_widget.setAutoFillBackground(False)
-        self._scroll_layout = QVBoxLayout(scroll_widget)
-        self._scroll_layout.setSpacing(6)
-        self._scroll_layout.setContentsMargins(0, 0, 0, 0)
 
         # === Window settings ===
         win_group = QGroupBox(t("subwin_basic"))
@@ -521,24 +449,36 @@ class SubtitleSettingsWidget(QWidget):
         g.addWidget(self._hide_duration_spin, r, 1)
 
         self._update_win_bg_controls_state()
-        self._scroll_layout.addWidget(win_group)
+        layout.addWidget(win_group)
 
-        # === Text lines ===
-        self._lines_group = QGroupBox(t("subwin_text_lines"))
-        self._lines_layout = QVBoxLayout(self._lines_group)
-        self._lines_layout.setSpacing(6)
+        # === Text lines (list + edit dialog) ===
+        lines_group = QGroupBox(t("subwin_text_lines"))
+        lines_layout = QVBoxLayout(lines_group)
 
-        self._rebuild_lines()
+        self._lines_list = QListWidget()
+        self._lines_list.itemDoubleClicked.connect(self._edit_line)
+        self._refresh_lines_list()
+        lines_layout.addWidget(self._lines_list)
 
-        self._add_btn = QPushButton(t("subwin_add_line"))
-        self._add_btn.clicked.connect(self._add_line)
-        self._lines_layout.addWidget(self._add_btn)
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton(t("btn_add"))
+        add_btn.clicked.connect(self._add_line)
+        btn_row.addWidget(add_btn)
+        edit_btn = QPushButton(t("btn_edit"))
+        edit_btn.clicked.connect(self._edit_current_line)
+        btn_row.addWidget(edit_btn)
+        del_btn = QPushButton(t("btn_remove"))
+        del_btn.clicked.connect(self._remove_line)
+        btn_row.addWidget(del_btn)
+        up_btn = QPushButton(t("subwin_move_up"))
+        up_btn.clicked.connect(self._move_line_up)
+        btn_row.addWidget(up_btn)
+        down_btn = QPushButton(t("subwin_move_down"))
+        down_btn.clicked.connect(self._move_line_down)
+        btn_row.addWidget(down_btn)
+        lines_layout.addLayout(btn_row)
 
-        self._scroll_layout.addWidget(self._lines_group)
-        self._scroll_layout.addStretch()
-
-        scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll)
+        layout.addWidget(lines_group)
 
     def _on_reset(self):
         ret = QMessageBox.question(
@@ -567,53 +507,40 @@ class SubtitleSettingsWidget(QWidget):
         for ctrl in self._bg_color_controls:
             ctrl.setEnabled(not has_image)
 
-    def _rebuild_lines(self):
-        for w in self._line_widgets:
-            self._lines_layout.removeWidget(w)
-            w.deleteLater()
-        for sep in self._separators:
-            self._lines_layout.removeWidget(sep)
-            sep.deleteLater()
-        self._line_widgets = []
-        self._separators = []
-
+    def _refresh_lines_list(self):
+        self._lines_list.clear()
         lines = self._settings.get("lines", DEFAULT_SUBTITLE_WIN_SETTINGS["lines"])
-        n = len(lines)
-        for i, cfg in enumerate(lines):
-            removable = n > 1
-            w = _LineConfigWidget(cfg, removable=removable)
-            w.changed.connect(self._on_change)
-            w.remove_requested.connect(lambda idx=i: self._remove_line(idx))
-            w.move_up_requested.connect(lambda idx=i: self._move_line_up(idx))
-            w.move_down_requested.connect(lambda idx=i: self._move_line_down(idx))
-            w.set_move_enabled(up=i > 0, down=i < n - 1)
-            self._line_widgets.append(w)
-            self._lines_layout.insertWidget(self._lines_layout.count() - 1, w)
+        for cfg in lines:
+            line_type = cfg.get("type", "original")
+            enabled = cfg.get("enabled", True)
+            label = t("subwin_original") if line_type == "original" else t("subwin_translation")
+            if line_type == "translation":
+                lang = cfg.get("lang", "zh")
+                label += f" ({lang})"
+            font = cfg.get("font_family", "Microsoft YaHei")
+            size = cfg.get("font_size", 24)
+            status = "✓" if enabled else "✗"
+            text = f"{status}  {label}  |  {font} {size}pt"
+            item = QListWidgetItem(text)
+            item.setData(Qt.ItemDataRole.UserRole, cfg)
+            self._lines_list.addItem(item)
 
-            if i < n - 1:
-                sep = QFrame()
-                sep.setFrameShape(QFrame.Shape.HLine)
-                sep.setStyleSheet("color: #555;")
-                self._separators.append(sep)
-                self._lines_layout.insertWidget(self._lines_layout.count() - 1, sep)
+    def _edit_line(self, item):
+        cfg = item.data(Qt.ItemDataRole.UserRole)
+        row = self._lines_list.row(item)
+        dlg = LineEditDialog(cfg, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            new_cfg = dlg.get_config()
+            lines = self._settings.get("lines", [])[:]
+            lines[row] = new_cfg
+            self._settings["lines"] = lines
+            self._refresh_lines_list()
+            self._schedule_emit()
 
-    def _move_line_up(self, index):
-        if index <= 0:
-            return
-        lines = self._get_lines_config()
-        lines[index], lines[index - 1] = lines[index - 1], lines[index]
-        self._settings["lines"] = lines
-        self._rebuild_lines()
-        self._schedule_emit()
-
-    def _move_line_down(self, index):
-        lines = self._get_lines_config()
-        if index >= len(lines) - 1:
-            return
-        lines[index], lines[index + 1] = lines[index + 1], lines[index]
-        self._settings["lines"] = lines
-        self._rebuild_lines()
-        self._schedule_emit()
+    def _edit_current_line(self):
+        item = self._lines_list.currentItem()
+        if item:
+            self._edit_line(item)
 
     def _add_line(self):
         new_line = {
@@ -629,27 +556,46 @@ class SubtitleSettingsWidget(QWidget):
             "outline_width": 2,
             "align": "center",
             "bg_image": "",
-            "scroll_speed": 60,
             "entry_animation": "none",
             "exit_animation": "none",
             "animation_duration": 300,
         }
-        lines = self._get_lines_config()
-        lines.append(new_line)
-        self._settings["lines"] = lines
-        self._rebuild_lines()
-        self._schedule_emit()
-
-    def _remove_line(self, index):
-        lines = self._get_lines_config()
-        if len(lines) > 1 and 0 <= index < len(lines):
-            lines.pop(index)
+        dlg = LineEditDialog(new_line, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            lines = self._settings.get("lines", [])[:]
+            lines.append(dlg.get_config())
             self._settings["lines"] = lines
-            self._rebuild_lines()
+            self._refresh_lines_list()
             self._schedule_emit()
 
-    def _get_lines_config(self):
-        return [w.get_config() for w in self._line_widgets]
+    def _remove_line(self):
+        row = self._lines_list.currentRow()
+        lines = self._settings.get("lines", [])[:]
+        if len(lines) > 1 and 0 <= row < len(lines):
+            lines.pop(row)
+            self._settings["lines"] = lines
+            self._refresh_lines_list()
+            self._schedule_emit()
+
+    def _move_line_up(self):
+        row = self._lines_list.currentRow()
+        lines = self._settings.get("lines", [])[:]
+        if row > 0:
+            lines[row], lines[row - 1] = lines[row - 1], lines[row]
+            self._settings["lines"] = lines
+            self._refresh_lines_list()
+            self._lines_list.setCurrentRow(row - 1)
+            self._schedule_emit()
+
+    def _move_line_down(self):
+        row = self._lines_list.currentRow()
+        lines = self._settings.get("lines", [])[:]
+        if 0 <= row < len(lines) - 1:
+            lines[row], lines[row + 1] = lines[row + 1], lines[row]
+            self._settings["lines"] = lines
+            self._refresh_lines_list()
+            self._lines_list.setCurrentRow(row + 1)
+            self._schedule_emit()
 
     def _on_change(self, *_):
         self._schedule_emit()
@@ -667,7 +613,7 @@ class SubtitleSettingsWidget(QWidget):
             "auto_hide_timeout": self._auto_hide_spin.value(),
             "auto_hide_animation": self._hide_anim_combo.currentData() or "fade",
             "auto_hide_duration": self._hide_duration_spin.value(),
-            "lines": self._get_lines_config(),
+            "lines": self._settings.get("lines", DEFAULT_SUBTITLE_WIN_SETTINGS["lines"]),
         }
         self._settings.update(s)
         self.settings_changed.emit(self._settings)
