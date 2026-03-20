@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QTabWidget,
@@ -71,6 +72,8 @@ _VALID_KEYS = {
     "subtitle_mode",
     "incremental_asr",
     "interim_interval",
+    "realtime_mode",
+    "realtime_slice_interval",
 }
 
 
@@ -184,6 +187,9 @@ class ControlPanel(QWidget):
     # ── VAD / ASR Tab ──
 
     def _create_vad_tab(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         widget = QWidget()
         layout = QVBoxLayout(widget)
         s = self._current_settings
@@ -454,8 +460,37 @@ class ControlPanel(QWidget):
 
         layout.addWidget(timing_group)
 
+        # ── Real-time transcription group ──
+        rt_group = QGroupBox(t("group_realtime"))
+        rt_layout = QGridLayout(rt_group)
+        rt_layout.setColumnStretch(0, 1)
+        rt_layout.setColumnMinimumWidth(1, 180)
+
+        self._realtime_mode_cb = QCheckBox(t("label_realtime_mode"))
+        self._realtime_mode_cb.setToolTip(t("realtime_mode_tooltip"))
+        self._realtime_mode_cb.setChecked(s.get("realtime_mode", False))
+        self._realtime_mode_cb.toggled.connect(self._on_timing_changed)
+        self._realtime_mode_cb.toggled.connect(self._auto_save)
+        rt_layout.addWidget(self._realtime_mode_cb, 0, 0, 1, 2)
+
+        self._realtime_slice_combo = QComboBox()
+        self._realtime_slice_combo.addItems(["0.5 s", "1.0 s", "2.0 s"])
+        saved_slice = s.get("realtime_slice_interval", 1.0)
+        slice_map = {0.5: 0, 1.0: 1, 2.0: 2}
+        self._realtime_slice_combo.setCurrentIndex(slice_map.get(saved_slice, 1))
+        self._realtime_slice_combo.setToolTip(t("realtime_slice_tooltip"))
+        self._realtime_slice_combo.setEnabled(s.get("realtime_mode", False))
+        self._realtime_slice_combo.currentIndexChanged.connect(self._on_timing_changed)
+        self._realtime_slice_combo.currentIndexChanged.connect(self._auto_save)
+        self._realtime_mode_cb.toggled.connect(self._realtime_slice_combo.setEnabled)
+        rt_layout.addWidget(QLabel(t("label_realtime_slice")), 1, 0)
+        rt_layout.addWidget(self._realtime_slice_combo, 1, 1)
+
+        layout.addWidget(rt_group)
+
         layout.addStretch()
-        return widget
+        scroll.setWidget(widget)
+        return scroll
 
     # ── Translation Tab ──
 
@@ -1206,6 +1241,9 @@ class ControlPanel(QWidget):
         self._current_settings["silence_duration"] = round(self._silence_duration.value(), 2)
         self._current_settings["incremental_asr"] = self._incremental_asr_cb.isChecked()
         self._current_settings["interim_interval"] = round(self._interim_interval_spin.value(), 2)
+        self._current_settings["realtime_mode"] = self._realtime_mode_cb.isChecked()
+        slice_values = [0.5, 1.0, 2.0]
+        self._current_settings["realtime_slice_interval"] = slice_values[self._realtime_slice_combo.currentIndex()]
 
     def _on_ui_lang_changed(self, index):
         lang = "en" if index == 0 else "zh"
@@ -1309,6 +1347,11 @@ class ControlPanel(QWidget):
 
     def get_settings(self):
         return dict(self._current_settings)
+
+    def set_realtime_mode(self, enabled: bool):
+        """Sync realtime mode checkbox from external source (e.g. overlay button)."""
+        if self._realtime_mode_cb.isChecked() != enabled:
+            self._realtime_mode_cb.setChecked(enabled)
 
     def get_active_model(self) -> dict | None:
         models = self._current_settings.get("models", [])

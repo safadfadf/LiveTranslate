@@ -96,6 +96,12 @@ incremental_asr_tooltip: "Auto-output completed sentences periodically during co
 label_interim_interval: "Interim interval:"
 silence_auto: "Auto"
 silence_fixed: "Fixed"
+group_realtime: "Real-time Transcription"
+label_realtime_mode: "Real-time mode:"
+realtime_mode_tooltip: "Start transcribing and translating before a sentence is finished, partial results update in real-time"
+label_realtime_slice: "Slice interval:"
+realtime_slice_tooltip: "How often to run ASR on the current audio buffer"
+btn_realtime: "RT"
 
 # Translation tab
 group_active_model: "Active Model (used in pipeline)"

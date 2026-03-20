@@ -7,6 +7,7 @@ import sys
 import signal
 import logging
 import threading
+import wave
 from concurrent.futures import ThreadPoolExecutor
 import yaml
 import time
@@ -198,6 +199,15 @@ class LiveTransApp:
         self._last_interim_check_time = 0.0
         self._interim_committed_tail = ""
 
+        # Real-time transcription state
+        self._realtime_mode = False
+        self._realtime_slice_interval = 1.0
+        self._rt_partial_gen = 0
+        self._rt_last_check_time = 0.0
+        self._rt_committed_tail = ""
+        self._rt_audio_log_dir = None
+        self._rt_audio_seq = 0
+
     def set_overlay(self, overlay: SubtitleOverlay):
         self._overlay = overlay
 
@@ -268,6 +278,15 @@ class LiveTransApp:
             self._incremental_enabled = settings["incremental_asr"]
         if "interim_interval" in settings:
             self._interim_interval = settings["interim_interval"]
+        if "realtime_mode" in settings:
+            new_rt = settings["realtime_mode"]
+            if new_rt != self._realtime_mode:
+                self._realtime_mode = new_rt
+                self._rt_reset_state()
+                if self._overlay:
+                    self._overlay.set_realtime_mode(new_rt)
+        if "realtime_slice_interval" in settings:
+            self._realtime_slice_interval = settings["realtime_slice_interval"]
         if "target_language" in settings:
             self._target_language = settings["target_language"]
             if self._overlay:
@@ -568,8 +587,12 @@ class LiveTransApp:
         self._last_interim_samples = 0
         self._last_interim_check_time = 0.0
         self._interim_committed_tail = ""
+        self._rt_reset_state()
         if self._overlay:
             self._overlay.update_monitor(0.0, 0.0)
+            if self._realtime_mode:
+                self._overlay.update_rt_partial("")
+                self._overlay.update_rt_partial_tl("")
         log.info("Pipeline paused")
 
     def resume(self):
@@ -944,6 +967,287 @@ class LiveTransApp:
 
         self._process_segment_text(original_text, result["language"], asr_ms)
 
+    # ── Real-time transcription methods ──
+
+    def _rt_reset_state(self):
+        self._rt_partial_gen = 0
+        self._rt_last_check_time = 0.0
+        self._rt_committed_tail = ""
+        # Create a new audio log session dir
+        base = Path(__file__).parent / "logs" / "rt_audio"
+        session_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._rt_audio_log_dir = base / session_name
+        self._rt_audio_log_dir.mkdir(parents=True, exist_ok=True)
+        self._rt_audio_seq = 0
+
+    def _save_rt_audio(self, audio_np, tag: str) -> str:
+        """Save audio numpy array (float32, 16kHz) as WAV and return filename."""
+        if self._rt_audio_log_dir is None:
+            return ""
+        self._rt_audio_seq += 1
+        fname = f"{self._rt_audio_seq:04d}_{tag}.wav"
+        fpath = self._rt_audio_log_dir / fname
+        pcm = (audio_np * 32767).clip(-32768, 32767).astype(np.int16)
+        with wave.open(str(fpath), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(pcm.tobytes())
+        return fname
+
+    def _save_rt_info(self, audio_fname: str, info: str):
+        """Write companion .txt for a WAV file with ASR result/context info."""
+        if not audio_fname or self._rt_audio_log_dir is None:
+            return
+        txt_path = self._rt_audio_log_dir / audio_fname.replace(".wav", ".txt")
+        txt_path.write_text(info, encoding="utf-8")
+
+    def _rt_strip_committed_overlap(self, text: str) -> str:
+        if not self._rt_committed_tail:
+            return text
+        tail = self._rt_committed_tail.lower().rstrip()
+        text_lower = text.lower()
+        max_check = min(len(tail), len(text_lower))
+        for overlap_len in range(max_check, 2, -1):
+            if text_lower[:overlap_len] == tail[-overlap_len:]:
+                stripped = text[overlap_len:].strip()
+                if stripped:
+                    log.debug(f"RT: stripped echo overlap ({overlap_len} chars)")
+                    return stripped
+                return ""
+        return text
+
+    def _do_realtime_asr(self):
+        """Run ASR on current VAD buffer for real-time partial output."""
+        peek = self._vad.peek_buffer()
+        if peek is None:
+            return
+        audio, duration = peek
+        if duration < 0.3:
+            return
+
+        samples = len(audio)
+        asr_ctx = ""
+        if self._asr_type == "qwen3" and hasattr(self._asr, "_context"):
+            asr_ctx = self._asr._context
+        audio_file = self._save_rt_audio(audio, "partial")
+        log.debug(
+            f"RT slice | engine={self._asr_type} lang={getattr(self._asr, 'language', '?')}"
+            f" samples={samples} dur={duration:.2f}s"
+            f" committed_tail='{self._rt_committed_tail[-30:]}'"
+            + (f" context='{asr_ctx[-60:]}'" if asr_ctx else "")
+            + (f" audio={audio_file}" if audio_file else "")
+        )
+
+        asr_start = time.perf_counter()
+        with self._asr_lock:
+            if not self._asr_ready or self._asr is None:
+                return
+            try:
+                result = self._asr.transcribe(audio)
+            except Exception as e:
+                log.error(f"RT ASR error: {e}", exc_info=True)
+                return
+        asr_ms = (time.perf_counter() - asr_start) * 1000
+
+        if result is None:
+            log.debug(f"RT slice result | None ({asr_ms:.0f}ms)")
+            return
+
+        raw_text = result["text"]
+        full_text = raw_text.strip()
+        log.debug(
+            f"RT slice result | ({asr_ms:.0f}ms) lang={result['language']}"
+            f" raw='{raw_text}' stripped='{full_text}'"
+        )
+
+        if not full_text or not any(c.isalnum() for c in full_text):
+            return
+
+        pre_overlap = full_text
+        full_text = self._rt_strip_committed_overlap(full_text)
+        if not full_text:
+            log.debug("RT slice | fully overlapped with committed, discarded")
+            return
+        if full_text != pre_overlap:
+            log.debug(f"RT slice | after overlap strip: '{full_text}'")
+
+        source_lang = result["language"]
+        log.debug(f"RT partial [{source_lang}] ({asr_ms:.0f}ms): {full_text}")
+
+        if audio_file:
+            info_lines = [
+                f"engine={self._asr_type} lang={getattr(self._asr, 'language', '?')}",
+                f"samples={samples} dur={duration:.2f}s asr_ms={asr_ms:.0f}",
+                f"committed_tail='{self._rt_committed_tail[-60:]}'",
+            ]
+            if asr_ctx:
+                info_lines.append(f"context='{asr_ctx[-120:]}'")
+            info_lines.append(f"raw='{raw_text}'")
+            info_lines.append(f"stripped='{full_text}'")
+            if full_text != pre_overlap:
+                info_lines.append(f"after_overlap='{full_text}'")
+            info_lines.append(f"source_lang={source_lang}")
+            self._save_rt_info(audio_file, "\n".join(info_lines))
+
+        # Show as partial
+        if self._overlay:
+            self._overlay.update_rt_partial(full_text)
+        if self._subwin:
+            self._subwin.update_text(full_text, "")
+        self._rt_partial_gen += 1
+        gen = self._rt_partial_gen
+        try:
+            self._tl_executor.submit(
+                self._translate_rt_partial, gen, full_text, source_lang
+            )
+        except RuntimeError:
+            pass
+
+    def _translate_rt_partial(self, gen: int, text: str, source_lang: str):
+        """Translate partial text; discard if generation is stale."""
+        target_lang = self._target_language
+        if source_lang == target_lang:
+            if gen == self._rt_partial_gen:
+                if self._overlay:
+                    self._overlay.update_rt_partial_tl("")
+                if self._subwin:
+                    self._subwin.update_text(text, "")
+            return
+        try:
+            translated = self._translator.translate(text, source_lang)
+            pt, ct = self._translator.last_usage
+            self._total_prompt_tokens += pt
+            self._total_completion_tokens += ct
+        except Exception as e:
+            log.error(f"RT partial translate error: {e}")
+            return
+        if gen == self._rt_partial_gen:
+            if self._overlay:
+                self._overlay.update_rt_partial_tl(translated)
+            if self._subwin:
+                self._subwin.update_text(text, translated)
+
+    def _translate_rt_committed(self, text: str, source_lang: str):
+        """Translate committed RT sentence and push to overlay."""
+        target_lang = self._target_language
+        translated = ""
+        if source_lang != target_lang:
+            try:
+                tl_start = time.perf_counter()
+                translated = self._translator.translate(text, source_lang)
+                tl_ms = (time.perf_counter() - tl_start) * 1000
+                self._translate_count += 1
+                pt, ct = self._translator.last_usage
+                self._total_prompt_tokens += pt
+                self._total_completion_tokens += ct
+                log.info(f"RT translate ({tl_ms:.0f}ms): {translated}")
+            except Exception as e:
+                log.error(f"RT committed translate error: {e}")
+                translated = ""
+        if self._overlay:
+            self._overlay.commit_rt(text, translated, source_lang)
+            self._overlay.update_stats(
+                self._asr_count, self._translate_count,
+                self._total_prompt_tokens, self._total_completion_tokens,
+                self._compute_cost()
+            )
+        if self._subwin:
+            self._subwin.update_text(text, translated if translated else {self._target_language: text})
+
+    def _process_realtime_final(self, speech_segment):
+        """Handle VAD flush in RT mode — commit remaining partial as final."""
+        seg_len = len(speech_segment) / 16000
+        samples = len(speech_segment)
+        asr_ctx = ""
+        if self._asr_type == "qwen3" and hasattr(self._asr, "_context"):
+            asr_ctx = self._asr._context
+        audio_file = self._save_rt_audio(speech_segment, "final")
+        log.info(
+            f"RT final slice | engine={self._asr_type} lang={getattr(self._asr, 'language', '?')}"
+            f" samples={samples} dur={seg_len:.2f}s"
+            f" committed_tail='{self._rt_committed_tail[-30:]}'"
+            + (f" context='{asr_ctx[-60:]}'" if asr_ctx else "")
+            + (f" audio={audio_file}" if audio_file else "")
+        )
+
+        asr_start = time.perf_counter()
+        with self._asr_lock:
+            if not self._asr_ready or self._asr is None:
+                return
+            try:
+                result = self._asr.transcribe(speech_segment)
+            except Exception as e:
+                log.error(f"RT final ASR error: {e}", exc_info=True)
+                return
+        asr_ms = (time.perf_counter() - asr_start) * 1000
+
+        if result is None:
+            log.debug(f"RT final result | None ({asr_ms:.0f}ms)")
+            if self._overlay:
+                self._overlay.update_rt_partial("")
+                self._overlay.update_rt_partial_tl("")
+            return
+
+        raw_text = result["text"]
+        original_text = raw_text.strip()
+        log.debug(
+            f"RT final result | ({asr_ms:.0f}ms) lang={result['language']}"
+            f" raw='{raw_text}' stripped='{original_text}'"
+        )
+
+        pre_overlap = original_text
+        original_text = self._rt_strip_committed_overlap(original_text)
+        if original_text != pre_overlap:
+            log.debug(f"RT final | after overlap strip: '{original_text}'")
+
+        if audio_file:
+            info_lines = [
+                "FINAL",
+                f"engine={self._asr_type} lang={getattr(self._asr, 'language', '?')}",
+                f"samples={samples} dur={seg_len:.2f}s asr_ms={asr_ms:.0f}",
+                f"committed_tail='{self._rt_committed_tail[-60:]}'",
+            ]
+            if asr_ctx:
+                info_lines.append(f"context='{asr_ctx[-120:]}'")
+            info_lines.append(f"raw='{raw_text}'")
+            info_lines.append(f"stripped='{original_text}'")
+            if original_text != pre_overlap:
+                info_lines.append(f"after_overlap='{original_text}'")
+            info_lines.append(f"source_lang={result['language']}")
+            self._save_rt_info(audio_file, "\n".join(info_lines))
+
+        if not original_text or not any(c.isalnum() for c in original_text):
+            if self._overlay:
+                self._overlay.update_rt_partial("")
+                self._overlay.update_rt_partial_tl("")
+            return
+
+        # Noise filter
+        alnum_chars = sum(1 for c in original_text if c.isalnum())
+        if seg_len >= 2.0 and alnum_chars <= 3:
+            log.debug(f"RT noise filter: {seg_len:.1f}s produced only '{original_text}'")
+            if self._overlay:
+                self._overlay.update_rt_partial("")
+                self._overlay.update_rt_partial_tl("")
+            return
+
+        source_lang = result["language"]
+        log.info(f"RT final commit [{source_lang}] ({asr_ms:.0f}ms): {original_text}")
+
+        self._asr_count += 1
+        self._msg_id += 1
+        # Clear partial and commit via translation
+        if self._overlay:
+            self._overlay.update_rt_partial("")
+            self._overlay.update_rt_partial_tl("")
+        try:
+            self._tl_executor.submit(
+                self._translate_rt_committed, original_text, source_lang
+            )
+        except RuntimeError:
+            pass
+
     def _pipeline_loop(self):
         silence_chunk = np.zeros(
             int(
@@ -960,7 +1264,11 @@ class LiveTransApp:
                     for _ in range(n):
                         seg = self._vad.process_chunk(silence_chunk)
                         if seg is not None and self._asr_ready:
-                            self._process_segment(seg)
+                            if self._realtime_mode:
+                                self._process_realtime_final(seg)
+                                self._rt_reset_state()
+                            else:
+                                self._process_segment(seg)
                             break
                 continue
 
@@ -977,8 +1285,15 @@ class LiveTransApp:
             speech_segment = self._vad.process_chunk(chunk)
 
             if speech_segment is None:
-                # Still accumulating — check for interim ASR
-                if (self._incremental_enabled and self._asr_ready
+                # Still accumulating — check for real-time or interim ASR
+                if (self._realtime_mode and self._asr_ready
+                        and self._vad._is_speaking):
+                    now = time.perf_counter()
+                    elapsed = now - self._rt_last_check_time
+                    if elapsed >= self._realtime_slice_interval:
+                        self._rt_last_check_time = now
+                        self._do_realtime_asr()
+                elif (self._incremental_enabled and self._asr_ready
                         and self._vad._is_speaking):
                     buf_samples = self._vad._speech_samples
                     total_dur = buf_samples / 16000
@@ -997,7 +1312,10 @@ class LiveTransApp:
                 continue
 
             # VAD flushed — handle final segment
-            if self._interim_active:
+            if self._realtime_mode:
+                self._process_realtime_final(speech_segment)
+                self._rt_reset_state()
+            elif self._interim_active:
                 self._process_interim_final(speech_segment)
             else:
                 self._process_segment(speech_segment)
@@ -1032,6 +1350,8 @@ def main():
 
     os.environ["QT_LOGGING_RULES"] = "qt.text.font.db=false"
     app = QApplication(sys.argv)
+    from PyQt6.QtCore import QLocale
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
     app.setQuitOnLastWindowClosed(False)
     _app_icon = create_app_icon()
     app.setWindowIcon(_app_icon)
@@ -1437,6 +1757,21 @@ def main():
     overlay.stop_requested.connect(on_pause)
     overlay.hide_requested.connect(on_toggle_overlay)
     overlay.quit_requested.connect(on_quit)
+
+    # --- Connect RT toggle from overlay button ---
+    def _on_overlay_rt_toggle(enabled):
+        live_trans._realtime_mode = enabled
+        live_trans._rt_reset_state()
+        overlay.set_realtime_mode(enabled)
+        panel.set_realtime_mode(enabled)
+
+    overlay.realtime_toggled.connect(_on_overlay_rt_toggle)
+
+    # Apply saved RT mode on startup
+    if saved and saved.get("realtime_mode", False):
+        live_trans._realtime_mode = True
+        live_trans._realtime_slice_interval = saved.get("realtime_slice_interval", 1.0)
+        overlay.set_realtime_mode(True)
 
     tray.setContextMenu(menu)
     tray.show()

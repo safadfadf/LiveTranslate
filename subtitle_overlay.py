@@ -542,6 +542,173 @@ _COMBO_CSS = """
     }
 """
 
+_SCROLL_CSS = """
+    QScrollArea { border: none; background: transparent; }
+    QScrollBar:vertical {
+        width: 6px; background: transparent;
+    }
+    QScrollBar::handle:vertical {
+        background: rgba(255,255,255,60); border-radius: 3px;
+        min-height: 20px;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+        height: 0;
+    }
+"""
+
+
+class RealtimeView(QWidget):
+    """Dedicated view for real-time streaming transcription mode."""
+
+    _max_committed = 30
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._style = DEFAULT_STYLE
+        self._committed_labels = []  # list of (orig_label, tl_label)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # History scroll area
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setStyleSheet(_SCROLL_CSS)
+
+        self._history = QWidget()
+        self._history.setStyleSheet("background: transparent;")
+        self._history_layout = QVBoxLayout(self._history)
+        self._history_layout.setContentsMargins(8, 2, 8, 2)
+        self._history_layout.setSpacing(1)
+        self._history_layout.addStretch()
+        self._scroll.setWidget(self._history)
+        layout.addWidget(self._scroll, 1)
+
+        # Current partial area (fixed at bottom)
+        partial_widget = QWidget()
+        partial_widget.setStyleSheet("background: transparent;")
+        partial_layout = QVBoxLayout(partial_widget)
+        partial_layout.setContentsMargins(8, 4, 8, 4)
+        partial_layout.setSpacing(2)
+
+        self._partial_orig = QLabel("")
+        self._partial_orig.setWordWrap(True)
+        self._partial_orig.setTextFormat(Qt.TextFormat.RichText)
+        self._partial_orig.setStyleSheet("background: transparent;")
+        partial_layout.addWidget(self._partial_orig)
+
+        self._partial_tl = QLabel("")
+        self._partial_tl.setWordWrap(True)
+        self._partial_tl.setTextFormat(Qt.TextFormat.RichText)
+        self._partial_tl.setStyleSheet("background: transparent;")
+        partial_layout.addWidget(self._partial_tl)
+
+        layout.addWidget(partial_widget)
+        self._apply_fonts()
+
+    def _apply_fonts(self):
+        s = self._style
+        self._partial_orig.setFont(QFont(s["original_font_family"], s["original_font_size"]))
+        self._partial_tl.setFont(QFont(s["translation_font_family"], s["translation_font_size"]))
+
+    def set_partial(self, text: str):
+        s = self._style
+        if text:
+            self._partial_orig.setText(
+                f'<span style="color:{s["original_color"]};">{_escape(text)}</span>'
+            )
+        else:
+            self._partial_orig.setText("")
+
+    def set_partial_translation(self, text: str):
+        s = self._style
+        if text:
+            self._partial_tl.setText(
+                f'<span style="color:{s["translation_color"]};">&gt; {_escape(text)}</span>'
+            )
+        else:
+            self._partial_tl.setText("")
+
+    def commit(self, original: str, translation: str, source_lang: str):
+        """Move a finalized pair to history."""
+        s = self._style
+        header = (
+            f'<span style="color:#6cf;">[{_escape(source_lang)}]</span> '
+            f'<span style="color:{s["original_color"]};">{_escape(original)}</span>'
+        )
+        orig_lbl = QLabel(header)
+        orig_lbl.setWordWrap(True)
+        orig_lbl.setTextFormat(Qt.TextFormat.RichText)
+        orig_lbl.setFont(QFont(s["original_font_family"], s["original_font_size"]))
+        orig_lbl.setStyleSheet("background: transparent;")
+        self._history_layout.addWidget(orig_lbl)
+
+        tl_lbl = None
+        if translation:
+            tl_lbl = QLabel(f'<span style="color:{s["translation_color"]};">&gt; {_escape(translation)}</span>')
+            tl_lbl.setWordWrap(True)
+            tl_lbl.setTextFormat(Qt.TextFormat.RichText)
+            tl_lbl.setFont(QFont(s["translation_font_family"], s["translation_font_size"]))
+            tl_lbl.setStyleSheet("background: transparent;")
+            self._history_layout.addWidget(tl_lbl)
+
+        self._committed_labels.append((orig_lbl, tl_lbl))
+
+        # Trim oldest
+        while len(self._committed_labels) > self._max_committed:
+            old_orig, old_tl = self._committed_labels.pop(0)
+            self._history_layout.removeWidget(old_orig)
+            old_orig.deleteLater()
+            if old_tl:
+                self._history_layout.removeWidget(old_tl)
+                old_tl.deleteLater()
+
+        # Clear partial
+        self._partial_orig.setText("")
+        self._partial_tl.setText("")
+        QTimer.singleShot(50, self._scroll_to_bottom)
+
+    def update_committed_translation(self, index: int, translation: str):
+        """Update the translation of a committed item by index (from end)."""
+        if 0 <= index < len(self._committed_labels):
+            s = self._style
+            _, tl_lbl = self._committed_labels[index]
+            if tl_lbl:
+                tl_lbl.setText(f'<span style="color:{s["translation_color"]};">&gt; {_escape(translation)}</span>')
+
+    def clear(self):
+        for orig_lbl, tl_lbl in self._committed_labels:
+            self._history_layout.removeWidget(orig_lbl)
+            orig_lbl.deleteLater()
+            if tl_lbl:
+                self._history_layout.removeWidget(tl_lbl)
+                tl_lbl.deleteLater()
+        self._committed_labels.clear()
+        self._partial_orig.setText("")
+        self._partial_tl.setText("")
+
+    def apply_style(self, s: dict):
+        self._style = s
+        self._apply_fonts()
+        # Rebuild history labels
+        for orig_lbl, tl_lbl in self._committed_labels:
+            orig_lbl.setFont(QFont(s["original_font_family"], s["original_font_size"]))
+            if tl_lbl:
+                tl_lbl.setFont(QFont(s["translation_font_family"], s["translation_font_size"]))
+        # Update partial colors
+        if self._partial_orig.text():
+            self._partial_orig.setFont(QFont(s["original_font_family"], s["original_font_size"]))
+        if self._partial_tl.text():
+            self._partial_tl.setFont(QFont(s["translation_font_family"], s["translation_font_size"]))
+
+    def _scroll_to_bottom(self):
+        sb = self._scroll.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+
 _CHECK_CSS = (
     "QCheckBox { color: #888; background: transparent; spacing: 3px; }"
     "QCheckBox::indicator { width: 12px; height: 12px; }"
@@ -565,6 +732,7 @@ class DragHandle(QWidget):
     hide_clicked = pyqtSignal()
     quit_clicked = pyqtSignal()
     mode_changed = pyqtSignal(str)  # "full" or "compact"
+    realtime_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -611,6 +779,11 @@ class DragHandle(QWidget):
         self._subtitle_btn = _btn(t("subtitle"))
         self._subtitle_btn.clicked.connect(self.subtitle_clicked.emit)
         row1.addWidget(self._subtitle_btn)
+
+        self._rt_btn = _btn(t("btn_realtime"))
+        self._rt_btn.clicked.connect(self._on_rt_toggle)
+        self._rt_checked = False
+        row1.addWidget(self._rt_btn)
 
         self._running = False
         self._start_stop_btn = _btn(t("paused"))
@@ -780,12 +953,33 @@ class DragHandle(QWidget):
         self._row2_widget.setVisible(not compact)
         self._clear_btn.setVisible(not compact)
         self._subtitle_btn.setVisible(not compact)
+        self._rt_btn.setVisible(not compact)
         self._mode_btn.setText(t("mode_compact") if compact else t("mode_full"))
         self.setFixedHeight(24 if compact else 62)
 
     def set_mode(self, mode: str):
         if mode != self._mode:
             self._apply_mode(mode)
+
+    def _on_rt_toggle(self):
+        self._rt_checked = not self._rt_checked
+        self._update_rt_btn_style()
+        self.realtime_toggled.emit(self._rt_checked)
+
+    def _update_rt_btn_style(self):
+        if self._rt_checked:
+            self._rt_btn.setStyleSheet(
+                _BTN_CSS.replace("rgba(255,255,255,20)", "rgba(80,180,80,40)").replace(
+                    "rgba(255,255,255,40)", "rgba(80,180,80,80)"
+                )
+            )
+        else:
+            self._rt_btn.setStyleSheet(_BTN_CSS)
+
+    def set_realtime_checked(self, checked: bool):
+        if self._rt_checked != checked:
+            self._rt_checked = checked
+            self._update_rt_btn_style()
 
     def set_subtitle_checked(self, checked: bool):
         self._subtitle_btn.setStyleSheet(
@@ -805,6 +999,10 @@ class SubtitleOverlay(QWidget):
     update_monitor_signal = pyqtSignal(float, float, object)
     update_stats_signal = pyqtSignal(int, int, int, int, float)
     update_asr_device_signal = pyqtSignal(str)
+    # RT mode signals (thread-safe)
+    update_rt_partial_signal = pyqtSignal(str)
+    update_rt_partial_tl_signal = pyqtSignal(str)
+    commit_rt_signal = pyqtSignal(str, str, str)  # (original, translation, lang)
 
     settings_requested = pyqtSignal()
     target_language_changed = pyqtSignal(str)
@@ -815,6 +1013,7 @@ class SubtitleOverlay(QWidget):
     quit_requested = pyqtSignal()
     subtitle_toggled = pyqtSignal()
     mode_changed = pyqtSignal(str)  # "full" or "compact"
+    realtime_toggled = pyqtSignal(bool)
 
     def __init__(self, config):
         super().__init__()
@@ -822,6 +1021,7 @@ class SubtitleOverlay(QWidget):
         self._messages = {}
         self._max_messages = 50
         self._click_through = False
+        self._realtime_active = False
         self._setup_ui()
 
         self.add_message_signal.connect(self._on_add_message)
@@ -830,6 +1030,9 @@ class SubtitleOverlay(QWidget):
         self.update_monitor_signal.connect(self._on_update_monitor)
         self.update_stats_signal.connect(self._on_update_stats)
         self.update_asr_device_signal.connect(self._on_update_asr_device)
+        self.update_rt_partial_signal.connect(self._on_update_rt_partial)
+        self.update_rt_partial_tl_signal.connect(self._on_update_rt_partial_tl)
+        self.commit_rt_signal.connect(self._on_commit_rt)
 
     def _setup_ui(self):
         self.setWindowFlags(
@@ -878,6 +1081,7 @@ class SubtitleOverlay(QWidget):
         self._handle.clear_clicked.connect(self._on_clear)
         self._handle.quit_clicked.connect(self.quit_requested.emit)
         self._handle.mode_changed.connect(self._on_mode_changed)
+        self._handle.realtime_toggled.connect(self.realtime_toggled.emit)
         container_layout.addWidget(self._handle)
 
         # Monitor bar (collapsible)
@@ -912,6 +1116,11 @@ class SubtitleOverlay(QWidget):
 
         self._scroll.setWidget(self._msg_container)
         container_layout.addWidget(self._scroll)
+
+        # Real-time view (initially hidden)
+        self._rt_view = RealtimeView()
+        self._rt_view.setVisible(False)
+        container_layout.addWidget(self._rt_view)
 
         grip_row = QHBoxLayout()
         grip_row.addStretch()
@@ -966,7 +1175,8 @@ class SubtitleOverlay(QWidget):
         hwnd = int(self.winId())
         style = ctypes.windll.user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
 
-        scroll_top = self._scroll.mapTo(self, QPoint(0, 0)).y()
+        content_widget = self._rt_view if self._realtime_active else self._scroll
+        scroll_top = content_widget.mapTo(self, QPoint(0, 0)).y()
         in_header = 0 <= local.x() <= self.width() and 0 <= local.y() < scroll_top
 
         if in_header:
@@ -1036,6 +1246,20 @@ class SubtitleOverlay(QWidget):
             self._msg_layout.removeWidget(msg)
             msg.deleteLater()
         self._messages.clear()
+        self._rt_view.clear()
+
+    # RT mode slots
+    @pyqtSlot(str)
+    def _on_update_rt_partial(self, text: str):
+        self._rt_view.set_partial(text)
+
+    @pyqtSlot(str)
+    def _on_update_rt_partial_tl(self, text: str):
+        self._rt_view.set_partial_translation(text)
+
+    @pyqtSlot(str, str, str)
+    def _on_commit_rt(self, original: str, translation: str, source_lang: str):
+        self._rt_view.commit(original, translation, source_lang)
 
     def _scroll_to_bottom(self):
         if not self._handle.auto_scroll:
@@ -1063,6 +1287,15 @@ class SubtitleOverlay(QWidget):
         ChatMessage._current_style = s
         for msg in self._messages.values():
             msg.apply_style(s)
+        # Update RT view style
+        self._rt_view.apply_style(s)
+
+    def set_realtime_mode(self, enabled: bool):
+        """Switch between normal chat view and real-time streaming view."""
+        self._realtime_active = enabled
+        self._scroll.setVisible(not enabled)
+        self._rt_view.setVisible(enabled)
+        self._handle.set_realtime_checked(enabled)
 
     # Thread-safe public API
     def add_message(self, msg_id, timestamp, original, source_lang, asr_ms):
@@ -1081,6 +1314,16 @@ class SubtitleOverlay(QWidget):
 
     def update_asr_device(self, device: str):
         self.update_asr_device_signal.emit(device)
+
+    # RT mode thread-safe API
+    def update_rt_partial(self, text: str):
+        self.update_rt_partial_signal.emit(text)
+
+    def update_rt_partial_tl(self, text: str):
+        self.update_rt_partial_tl_signal.emit(text)
+
+    def commit_rt(self, original: str, translation: str, source_lang: str):
+        self.commit_rt_signal.emit(original, translation, source_lang)
 
     def set_target_language(self, lang: str):
         self._handle.set_target_language(lang)

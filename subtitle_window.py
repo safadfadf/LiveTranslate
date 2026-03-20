@@ -182,21 +182,24 @@ class _SubtitleTextWidget(QWidget):
         self.update()
 
     def set_text(self, text: str):
-        # If old text exists and exit animation is configured, play exit first
-        if self._text and text != self._text and self._exit_animation != "none":
-            self._pending_text = text
-            self._stop_all_animations()
-            self.animate_out(callback=self._apply_pending_text)
+        if text == self._text:
             return
+        had_text = bool(self._text)
+        # Text→text replacement: skip exit animation, swap directly (no blank gap)
+        if self._text and text:
+            self._stop_all_animations()
+            self._content_opacity_val = 1.0
+            self._slide_offset_x_val = 0.0
+            self._slide_offset_y_val = 0.0
+            self._pending_text = None
+            self._text = text
+            self._update_height()
+            self.update()
+            return
+        # Empty→text or text→empty: use normal animation flow
+        self._apply_text_immediate(text, skip_entry=had_text and bool(text))
 
-        self._apply_text_immediate(text)
-
-    def _apply_pending_text(self):
-        text = getattr(self, "_pending_text", "")
-        self._pending_text = None
-        self._apply_text_immediate(text)
-
-    def _apply_text_immediate(self, text: str):
+    def _apply_text_immediate(self, text: str, skip_entry: bool = False):
         # Stop any running animations and reset to final state
         self._stop_all_animations()
         self._content_opacity_val = 1.0
@@ -208,8 +211,13 @@ class _SubtitleTextWidget(QWidget):
         self._update_height()
         self.update()
 
-        if text:
+        if text and not skip_entry:
             self.animate_in()
+
+    def _apply_pending_text(self):
+        text = getattr(self, "_pending_text", "")
+        self._pending_text = None
+        self._apply_text_immediate(text)
 
     def _stop_all_animations(self):
         if self._anim_group and self._anim_group.state() != self._anim_group.State.Stopped:

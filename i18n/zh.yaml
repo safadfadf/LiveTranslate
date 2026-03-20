@@ -96,6 +96,12 @@ incremental_asr_tooltip: "连续语音时每隔一段时间自动输出已完成
 label_interim_interval: "识别间隔:"
 silence_auto: "自动"
 silence_fixed: "固定"
+group_realtime: "实时转录"
+label_realtime_mode: "实时转录模式:"
+realtime_mode_tooltip: "不等一句话说完就开始转录和翻译，部分结果实时更新覆盖"
+label_realtime_slice: "切片间隔:"
+realtime_slice_tooltip: "每隔多久对当前音频缓冲区做一次ASR转录"
+btn_realtime: "实时"
 
 # 翻译标签页
 group_active_model: "当前模型 (用于翻译管线)"
